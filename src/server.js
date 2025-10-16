@@ -26,12 +26,7 @@ const app = express();
 const httpServer = createServer(app);
 
 // Middlewares
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://conexaoproibida.com.br', 'https://www.conexaoproibida.com.br']
-    : 'http://localhost:3150',
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -83,9 +78,7 @@ const connectDB = async () => {
 // Configurar Socket.io
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.NODE_ENV === 'production' 
-      ? ['https://conexaoproibida.com.br', 'https://www.conexaoproibida.com.br']
-      : 'http://localhost:3150',
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     methods: ['GET', 'POST'],
     credentials: true
   }
