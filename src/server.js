@@ -4,11 +4,6 @@ import { Server } from 'socket.io';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Importar rotas
 import authRoutes from './routes/authRoutes.js';
@@ -30,32 +25,8 @@ dotenv.config();
 const app = express();
 const httpServer = createServer(app);
 
-// Configurar CORS
-const allowedOrigins = [
-  'https://conexaoproibida.com.br',
-  'https://www.conexaoproibida.com.br',
-  'http://localhost:3000',
-  'http://localhost:3150'
-];
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // Permitir requisições sem origin (Postman, curl, etc)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log('❌ CORS bloqueou origem:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
 // Middlewares
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -75,24 +46,13 @@ app.use('/api/credits', creditRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/chat', chatRoutes);
 
-// Servir arquivos estáticos do frontend em produção
-if (process.env.NODE_ENV === 'production') {
-  const frontendPath = path.join(__dirname, '../../frontend/dist');
-  app.use(express.static(frontendPath));
-  
-  // Todas as rotas não-API retornam o index.html (SPA)
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(frontendPath, 'index.html'));
+// Rota 404
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Rota não encontrada.'
   });
-} else {
-  // Rota 404 em desenvolvimento
-  app.use((req, res) => {
-    res.status(404).json({
-      success: false,
-      message: 'Rota não encontrada.'
-    });
-  });
-}
+});
 
 // Error handler
 app.use((err, req, res, next) => {
