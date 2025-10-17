@@ -133,7 +133,13 @@ export const handleWhatsAppMessage = async (req, res) => {
 
     // Extrair dados
     const modeloUserId = userId; // ID do usuário da modelo no nosso banco
-    const clientPhone = data.key.remoteJid.replace('@s.whatsapp.net', ''); // Telefone do cliente
+    let clientPhone = data.key.remoteJid.replace('@s.whatsapp.net', ''); // Telefone do cliente
+    
+    // Remover código do país (55) se existir
+    if (clientPhone.startsWith('55')) {
+      clientPhone = clientPhone.substring(2);
+    }
+    
     const messageContent = data.message?.conversation || data.message?.extendedTextMessage?.text;
 
     if (!messageContent) {
