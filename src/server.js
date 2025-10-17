@@ -25,8 +25,28 @@ dotenv.config();
 const app = express();
 const httpServer = createServer(app);
 
+// Configurar CORS para aceitar múltiplas origens
+const allowedOrigins = process.env.FRONTEND_URL 
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+  : ['http://localhost:3000'];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sem origin (mobile apps, postman, etc)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.warn('⚠️ Origem bloqueada pelo CORS:', origin);
+      callback(new Error('Não permitido pelo CORS'));
+    }
+  },
+  credentials: true
+};
+
 // Middlewares
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -78,7 +98,7 @@ const connectDB = async () => {
 // Configurar Socket.io
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true
   }
