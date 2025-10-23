@@ -65,6 +65,7 @@ export const register = async (req, res) => {
       cpf: cpf.replace(/\D/g, ''), // Salvar CPF apenas com números
       phone: processedPhone,
       password: hashedPassword,
+      isPasswordSet: true, // Senha foi definida no registro
       credits: 0 // Usuários começam sem créditos
     });
 
@@ -113,6 +114,14 @@ export const login = async (req, res) => {
       return res.status(401).json({
         success: false,
         message: 'Credenciais inválidas.'
+      });
+    }
+
+    // Verificar se o usuário completou o cadastro
+    if (!user.isPasswordSet || !user.password) {
+      return res.status(403).json({
+        success: false,
+        message: 'Por favor, complete seu cadastro através do link enviado no email.'
       });
     }
 
@@ -176,6 +185,132 @@ export const getMe = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erro ao obter dados do usuário.',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Verificar token de registro
+// @route   GET /api/auth/verify-token/:token
+// @access  Public
+export const verifyRegistrationToken = async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token não fornecido.'
+      });
+    }
+
+    // Buscar usuário pelo token
+    const user = await User.findOne({ 
+      registrationToken: token,
+      registrationTokenExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token inválido ou expirado.'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        name: user.name,
+        email: user.email,
+        credits: user.credits
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao verificar token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao verificar token.',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Completar registro (criar senha após compra)
+// @route   POST /api/auth/complete-registration
+// @access  Public
+export const completeRegistration = async (req, res) => {
+  try {
+    const { token, password } = req.body;
+
+    // Validações
+    if (!token || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token e senha são obrigatórios.'
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'A senha deve ter no mínimo 6 caracteres.'
+      });
+    }
+
+    // Buscar usuário pelo token
+    const user = await User.findOne({ 
+      registrationToken: token,
+      registrationTokenExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token inválido ou expirado.'
+      });
+    }
+
+    // Verificar se já tem senha
+    if (user.isPasswordSet) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cadastro já foi completado.'
+      });
+    }
+
+    // Hash da senha
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Atualizar usuário
+    user.password = hashedPassword;
+    user.isPasswordSet = true;
+    user.registrationToken = null;
+    user.registrationTokenExpires = null;
+
+    await user.save();
+
+    console.log(`✅ Registro completado para: ${user.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Cadastro completado com sucesso!',
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          credits: user.credits,
+          role: user.role
+        },
+        token: generateToken(user._id)
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao completar registro:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao completar cadastro.',
       error: error.message
     });
   }

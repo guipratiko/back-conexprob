@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Senha é obrigatória'],
+    required: false, // Permitir pré-cadastro sem senha
     minlength: 6
   },
   credits: {
@@ -42,6 +42,18 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  isPasswordSet: {
+    type: Boolean,
+    default: false
+  },
+  registrationToken: {
+    type: String,
+    default: null
+  },
+  registrationTokenExpires: {
+    type: Date,
+    default: null
   },
   avatar: {
     type: String,

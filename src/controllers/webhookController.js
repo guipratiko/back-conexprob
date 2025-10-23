@@ -2,37 +2,47 @@ import Transaction from '../models/Transaction.js';
 import User from '../models/User.js';
 import mongoose from 'mongoose';
 import { io, connectedUsers } from '../server.js';
+import crypto from 'crypto';
 
 // @desc    Webhook para receber notificações de pagamento (Appmax/N8N)
 // @route   POST /api/webhook/payment
 // @access  Public (mas deve validar assinatura em produção)
 export const handlePaymentWebhook = async (req, res) => {
   try {
-    const { transactionId, status, amount, metadata } = req.body;
+    const { 
+      transactionId, 
+      name, 
+      email, 
+      amount, 
+      status, 
+      cpf, 
+      phone, 
+      credits,
+      WEBHOOK_SECRET 
+    } = req.body;
 
     console.log('📨 Webhook recebido:', req.body);
 
+    // Validar WEBHOOK_SECRET
+    if (WEBHOOK_SECRET !== process.env.WEBHOOK_SECRET) {
+      console.log('❌ WEBHOOK_SECRET inválido');
+      return res.status(401).json({
+        success: false,
+        message: 'Não autorizado.'
+      });
+    }
+
     // Validação básica
-    if (!transactionId || !status) {
+    if (!transactionId || !status || !email || !credits) {
       return res.status(400).json({
         success: false,
         message: 'Dados incompletos no webhook.'
       });
     }
 
-    // Buscar transação
-    const transaction = await Transaction.findOne({ transactionId });
-
-    if (!transaction) {
-      console.log('❌ Transação não encontrada:', transactionId);
-      return res.status(404).json({
-        success: false,
-        message: 'Transação não encontrada.'
-      });
-    }
-
-    // Se já foi processada, ignorar
-    if (transaction.status === 'completed') {
+    // Verificar se a transação já foi processada
+    const existingTransaction = await Transaction.findOne({ transactionId });
+    if (existingTransaction && existingTransaction.status === 'completed') {
       console.log('⚠️ Transação já processada:', transactionId);
       return res.status(200).json({
         success: true,
@@ -40,25 +50,84 @@ export const handlePaymentWebhook = async (req, res) => {
       });
     }
 
-    // Atualizar status da transação
-    transaction.status = status === 'approved' || status === 'completed' ? 'completed' : 'failed';
-    
-    if (metadata) {
-      transaction.metadata = metadata;
+    // Verificar se o pagamento foi aprovado
+    const isApproved = status.toLowerCase() === 'aprovado' || status.toLowerCase() === 'completed';
+
+    if (!isApproved) {
+      console.log('⚠️ Pagamento não aprovado:', status);
+      return res.status(200).json({
+        success: true,
+        message: 'Pagamento não aprovado, nenhuma ação tomada.'
+      });
     }
 
-    await transaction.save();
+    // Buscar usuário por email ou CPF
+    let user = await User.findOne({ 
+      $or: [
+        { email: email.toLowerCase() },
+        { cpf: cpf ? cpf.replace(/\D/g, '') : '' }
+      ]
+    });
 
-    // Se aprovado, adicionar créditos ao usuário
-    if (transaction.status === 'completed') {
-      const user = await User.findById(transaction.userId);
+    const creditsAmount = parseInt(credits);
+
+    if (user) {
+      // Usuário já existe - SOMAR os créditos
+      console.log(`👤 Usuário encontrado: ${user.email}`);
+      user.credits += creditsAmount;
+      await user.save();
+      console.log(`✅ ${creditsAmount} créditos SOMADOS ao usuário ${user.email}. Total agora: ${user.credits}`);
+    } else {
+      // Usuário não existe - criar pré-cadastro
+      console.log(`🆕 Criando pré-cadastro para: ${email}`);
       
-      if (user) {
-        user.credits += transaction.credits;
-        await user.save();
+      // Gerar token único para completar o registro
+      const registrationToken = crypto.randomBytes(32).toString('hex');
+      const tokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
 
-        console.log(`✅ ${transaction.credits} créditos adicionados ao usuário ${user.email}`);
-      }
+      user = new User({
+        name,
+        email: email.toLowerCase(),
+        cpf: cpf ? cpf.replace(/\D/g, '') : '',
+        phone: phone || '',
+        credits: creditsAmount,
+        isPasswordSet: false,
+        registrationToken,
+        registrationTokenExpires: tokenExpires,
+        role: 'user',
+        isActive: true
+      });
+
+      await user.save();
+      
+      console.log(`✅ Pré-cadastro criado com ${creditsAmount} créditos`);
+      console.log(`🔑 Token de registro: ${registrationToken}`);
+      console.log(`📧 Link: ${process.env.FRONTEND_URL}/complete-registration?token=${registrationToken}`);
+      
+      // TODO: Enviar email com link para criar senha
+      // sendRegistrationEmail(user.email, registrationToken);
+    }
+
+    // Criar ou atualizar a transação
+    if (existingTransaction) {
+      existingTransaction.status = 'completed';
+      existingTransaction.credits = creditsAmount;
+      existingTransaction.userId = user._id;
+      existingTransaction.type = 'purchase';
+      await existingTransaction.save();
+    } else {
+      const transaction = new Transaction({
+        transactionId,
+        userId: user._id,
+        type: 'purchase',
+        amount: parseFloat(amount),
+        credits: creditsAmount,
+        status: 'completed',
+        paymentMethod: 'pix',
+        description: `Compra de ${creditsAmount} créditos`,
+        metadata: { name, email, cpf, phone }
+      });
+      await transaction.save();
     }
 
     res.status(200).json({
@@ -66,7 +135,11 @@ export const handlePaymentWebhook = async (req, res) => {
       message: 'Webhook processado com sucesso!',
       data: {
         transactionId,
-        status: transaction.status
+        userId: user._id,
+        email: user.email,
+        credits: user.credits,
+        isNewUser: !user.isPasswordSet,
+        registrationToken: !user.isPasswordSet ? user.registrationToken : undefined
       }
     });
   } catch (error) {
@@ -133,13 +206,7 @@ export const handleWhatsAppMessage = async (req, res) => {
 
     // Extrair dados
     const modeloUserId = userId; // ID do usuário da modelo no nosso banco
-    let clientPhone = data.key.remoteJid.replace('@s.whatsapp.net', ''); // Telefone do cliente
-    
-    // Remover código do país (55) se existir
-    if (clientPhone.startsWith('55')) {
-      clientPhone = clientPhone.substring(2);
-    }
-    
+    const clientPhone = data.key.remoteJid.replace('@s.whatsapp.net', ''); // Telefone do cliente
     const messageContent = data.message?.conversation || data.message?.extendedTextMessage?.text;
 
     if (!messageContent) {
