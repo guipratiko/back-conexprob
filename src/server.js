@@ -148,9 +148,8 @@ io.on('connection', (socket) => {
                 });
               }
             } else {
-              socket.emit('message-error', {
-                message: response.message
-              });
+              // Enviar erro completo para o cliente
+              socket.emit('message-error', response);
             }
           }
         })

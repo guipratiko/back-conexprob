@@ -2,6 +2,13 @@ import Model from '../models/Model.js';
 import User from '../models/User.js';
 import mongoose from 'mongoose';
 
+// Função helper para obter preço da modelo pelo nome
+const getModelPrice = (modelName) => {
+  const envKey = `PRICE_${modelName}`;
+  const price = parseInt(process.env[envKey]);
+  return price || 5; // Preço padrão caso não encontre
+};
+
 // @desc    Listar todas as modelos
 // @route   GET /api/models
 // @access  Public
@@ -30,12 +37,19 @@ export const getModels = async (req, res) => {
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
+    // Adicionar preço do .env em cada modelo
+    const modelsWithPrice = models.map(model => {
+      const modelObj = model.toObject();
+      modelObj.pricePerMessage = getModelPrice(model.name);
+      return modelObj;
+    });
+
     const count = await Model.countDocuments(query);
 
     res.status(200).json({
       success: true,
       data: {
-        models,
+        models: modelsWithPrice,
         totalPages: Math.ceil(count / limit),
         currentPage: page,
         total: count

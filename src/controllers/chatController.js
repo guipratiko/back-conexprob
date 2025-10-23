@@ -1,7 +1,15 @@
 import User from '../models/User.js';
+import Model from '../models/Model.js';
 import Transaction from '../models/Transaction.js';
 import mongoose from 'mongoose';
 import { sendWhatsAppMessage } from '../services/whatsappService.js';
+
+// Função helper para obter preço da modelo pelo nome
+const getModelPrice = (modelName) => {
+  const envKey = `PRICE_${modelName}`;
+  const price = parseInt(process.env[envKey]);
+  return price || 5; // Preço padrão caso não encontre
+};
 
 // @desc    Listar todas as conversas do usuário
 // @route   GET /api/chat/conversations
@@ -9,7 +17,7 @@ import { sendWhatsAppMessage } from '../services/whatsappService.js';
 export const getConversations = async (req, res) => {
   try {
     const user = await User.findById(req.userId)
-      .populate('conversations.modelId', 'name avatar role')
+      .populate('conversations.modelId', 'role')
       .select('conversations');
 
     if (!user) {
@@ -19,15 +27,51 @@ export const getConversations = async (req, res) => {
       });
     }
 
-    // Ordenar conversas por última mensagem
-    const conversations = user.conversations
-      .map(conv => ({
-        modelId: conv.modelId,
-        lastMessage: conv.lastMessage,
-        unreadCount: conv.unreadCount,
-        lastMessagePreview: conv.messages[conv.messages.length - 1]?.content || ''
-      }))
+    console.log('📊 Total de conversas:', user.conversations.length);
+    
+    // Buscar dados das modelos da tabela Model
+    const conversationsWithModelData = await Promise.all(
+      user.conversations.map(async (conv) => {
+        if (!conv.modelId) return null;
+        
+        // Buscar dados da modelo na tabela Model usando o userId
+        const modelData = await Model.findOne({ userId: conv.modelId._id });
+        
+        console.log('🔍 Conversa:', {
+          userId: conv.modelId._id,
+          modelData: modelData ? {
+            name: modelData.name,
+            coverPhoto: modelData.coverPhoto,
+            isOnline: modelData.isOnline
+          } : 'Não encontrada'
+        });
+        
+        if (!modelData) {
+          // Se não encontrar na tabela Model, retornar null (será filtrado)
+          return null;
+        }
+        
+        return {
+          modelId: {
+            _id: conv.modelId._id,
+            name: modelData.name,
+            avatar: modelData.coverPhoto, // Usar coverPhoto como avatar
+            role: conv.modelId.role,
+            isOnline: modelData.isOnline
+          },
+          lastMessage: conv.lastMessage,
+          unreadCount: conv.unreadCount,
+          lastMessagePreview: conv.messages[conv.messages.length - 1]?.content || ''
+        };
+      })
+    );
+    
+    // Filtrar conversas nulas e ordenar por última mensagem
+    const conversations = conversationsWithModelData
+      .filter(conv => conv !== null)
       .sort((a, b) => new Date(b.lastMessage) - new Date(a.lastMessage));
+
+    console.log('✅ Conversas processadas:', conversations.length);
 
     res.status(200).json({
       success: true,
@@ -134,14 +178,39 @@ export const sendMessage = async (req, res) => {
 
     // Verificar se recipient é uma modelo
     const isRecipientModel = recipient.role === 'model';
-    const creditsCharged = 0; // Créditos serão debitados externamente
-
-    // Buscar informações da modelo para envio do WhatsApp
+    
+    // Buscar informações da modelo
     let modelProfile = null;
+    let messagePrice = 0;
+    
     if (isRecipientModel) {
       const Model = mongoose.model('Model');
       modelProfile = await Model.findOne({ userId: recipientId });
+      
+      if (modelProfile) {
+        // Buscar preço do .env pelo nome da modelo
+        messagePrice = getModelPrice(modelProfile.name);
+        console.log(`💰 Preço da mensagem para ${modelProfile.name}: ${messagePrice} créditos`);
+        
+        // VERIFICAR CRÉDITOS SUFICIENTES
+        if (sender.credits < messagePrice) {
+          console.log(`❌ Créditos insuficientes. Tem: ${sender.credits}, Precisa: ${messagePrice}`);
+          
+          // Retornar erro especial com informações para o frontend
+          return res.status(402).json({
+            success: false,
+            message: 'Créditos insuficientes',
+            insufficientCredits: true,
+            currentCredits: sender.credits,
+            requiredCredits: messagePrice,
+            modelName: modelProfile.name,
+            creditsUrl: process.env.FRONTEND_URL?.split(',')[0] + '/credits'
+          });
+        }
+      }
     }
+    
+    const creditsCharged = 0; // Créditos NÃO serão debitados (débito está fora do sistema)
 
     // Criar mensagem
     const messageId = new mongoose.Types.ObjectId().toString();
@@ -272,6 +341,44 @@ export const markAsRead = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erro ao marcar mensagens como lidas',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Obter preço de mensagem da modelo
+// @route   GET /api/chat/model-price/:modelId
+// @access  Public
+export const getModelMessagePrice = async (req, res) => {
+  try {
+    const { modelId } = req.params;
+
+    // Buscar modelo
+    const modelProfile = await Model.findOne({ userId: modelId });
+
+    if (!modelProfile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Modelo não encontrada'
+      });
+    }
+
+    // Buscar preço do .env
+    const price = getModelPrice(modelProfile.name);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        modelId,
+        modelName: modelProfile.name,
+        pricePerMessage: price
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao buscar preço:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar preço',
       error: error.message
     });
   }
